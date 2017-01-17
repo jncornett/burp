@@ -1,4 +1,4 @@
-package burp
+package scanner
 
 import (
 	"bufio"
