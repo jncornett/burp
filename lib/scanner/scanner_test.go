@@ -14,26 +14,42 @@ func TestScannerScan(t *testing.T) {
 		Tag     scanner.Tag
 		Value   string
 	}{
-		{``, scanner.EOF, ""},
-		{`{foobar}`, scanner.VAR, "foobar"},
-		{`"foobar"`, scanner.TEXT, "foobar"},
-		{`"foo\"bar"`, scanner.TEXT, "foo\"bar"},
-		{"[", scanner.STARTEXEC, "["},
-		{"]", scanner.ENDEXEC, "]"},
-		{"(", scanner.STARTGROUP, "("},
-		{")", scanner.ENDGROUP, ")"},
-		{"^", scanner.REDIRERR, "^"},
+		{"", scanner.EOF, ""},
+		{" ", scanner.WS, " "},
+		{"  x", scanner.WS, "  "},
+		{"foobar", scanner.CHUNK, "foobar"},
+		{"foobar|", scanner.CHUNK, "foobar"},
 		{">", scanner.REDIROUT, ">"},
+		{"^", scanner.REDIRERR, "^"},
 		{";", scanner.BREAK, ";"},
-		{":", scanner.IDENTITY, ":"},
 		{"|", scanner.PIPE, "|"},
 		{"|x", scanner.PIPE, "|"},
-		{"&&", scanner.AND, "&&"},
-		{"&x", scanner.ILLEGAL, "&"},
+		{"&", scanner.BACKGRND, "&"},
+		{"&x", scanner.BACKGRND, "&"},
+		{"(", scanner.STARTGRP, "("},
+		{")", scanner.ENDGRP, ")"},
 		{"||", scanner.OR, "||"},
-		{"    ", scanner.WS, "    "},
-		{"032abczz_ZXYAB", scanner.TEXT, "032abczz_ZXYAB"},
-		{"?", scanner.ILLEGAL, "?"},
+		{"&&", scanner.AND, "&&"},
+
+		// escaping
+		{"\\ ", scanner.CHUNK, " "},
+		{"\\foobar", scanner.CHUNK, "foobar"},
+		{"\\>", scanner.CHUNK, ">"},
+		{"\\^", scanner.CHUNK, "^"},
+		{"\\|", scanner.CHUNK, "|"},
+		{"\\(", scanner.CHUNK, "("},
+		{"\\)", scanner.CHUNK, ")"},
+		{"\\&", scanner.CHUNK, "&"},
+		{"\\;", scanner.CHUNK, ";"},
+		{"\\\"", scanner.CHUNK, "\""},
+
+		// quoting
+		{"\"foo bar\"", scanner.CHUNK, "foo bar"},
+		{"\"foo\\\"bar\"", scanner.CHUNK, "foo\"bar"},
+		{"\"\\foobar\"", scanner.CHUNK, "foobar"},
+
+		// concatenation
+		{"\"foo bar\"\"buzz bat\"[something]", scanner.CHUNK, "foo barbuzz bat[something]"},
 	}
 	for _, test := range tests {
 		t.Run(test.Program, func(t *testing.T) {
@@ -54,22 +70,19 @@ func TestScannerScan(t *testing.T) {
 func TestScannerScanRepeated(t *testing.T) {
 	program := "foo &&bar||({this.var}|\"that stuff\"[ok]);echo"
 	tokens := []scanner.Token{
-		{Tag: scanner.TEXT, Value: "foo", Start: 0},
-		{Tag: scanner.WS, Value: " ", Start: 3},
-		{Tag: scanner.AND, Value: "&&", Start: 4},
-		{Tag: scanner.TEXT, Value: "bar", Start: 6},
-		{Tag: scanner.OR, Value: "||", Start: 9},
-		{Tag: scanner.STARTGROUP, Value: "(", Start: 11},
-		{Tag: scanner.VAR, Value: "this.var", Start: 12},
-		{Tag: scanner.PIPE, Value: "|", Start: 22},
-		{Tag: scanner.TEXT, Value: "that stuff", Start: 23},
-		{Tag: scanner.STARTEXEC, Value: "[", Start: 35},
-		{Tag: scanner.TEXT, Value: "ok", Start: 36},
-		{Tag: scanner.ENDEXEC, Value: "]", Start: 38},
-		{Tag: scanner.ENDGROUP, Value: ")", Start: 39},
-		{Tag: scanner.BREAK, Value: ";", Start: 40},
-		{Tag: scanner.TEXT, Value: "echo", Start: 41},
-		{Tag: scanner.EOF, Value: "", Start: 46},
+	// {Tag: scanner.CHUNK, Value: "foo", Start: 0},
+	// {Tag: scanner.WS, Value: " ", Start: 3},
+	// {Tag: scanner.AND, Value: "&&", Start: 4},
+	// {Tag: scanner.CHUNK, Value: "bar", Start: 6},
+	// {Tag: scanner.OR, Value: "||", Start: 9},
+	// {Tag: scanner.STARTGRP, Value: "(", Start: 11},
+	// {Tag: scanner.CHUNK, Value: "{this.var}", Start: 12},
+	// {Tag: scanner.PIPE, Value: "|", Start: 22},
+	// {Tag: scanner.CHUNK, Value: "that stuff[ok]", Start: 23},
+	// {Tag: scanner.ENDGRP, Value: ")", Start: 37},
+	// {Tag: scanner.BREAK, Value: ";", Start: 38},
+	// {Tag: scanner.CHUNK, Value: "echo", Start: 39},
+	// {Tag: scanner.EOF, Value: "", Start: 43},
 	}
 	s := scanner.NewScanner(strings.NewReader(program))
 	for i, tok := range tokens {

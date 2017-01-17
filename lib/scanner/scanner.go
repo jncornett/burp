@@ -6,110 +6,127 @@ import (
 	"io"
 )
 
+// Tag denotes the lexical type of a scanned Token
 type Tag int
 
+// The list of tags
 const (
-	ILLEGAL Tag = iota
-	EOF
+	EOF Tag = iota
 	WS
-	IDENTITY
-	TEXT
-	VAR
-	EXEC
-	ESCAPE
-	STARTEXEC
-	ENDEXEC
-	STARTGROUP
-	ENDGROUP
-	REDIRERR
+	CHUNK
 	REDIROUT
+	REDIRERR
 	PIPE
-	BREAK
+	BACKGRND
+	STARTGRP
+	ENDGRP
 	AND
 	OR
+	BREAK
 )
 
 const eof = rune(0)
 
+// Token is the unit token produced by a single call to Scanner.Scan
 type Token struct {
 	Tag
 	Value string
 	Start int
 }
 
+// Scanner is a stateful scanner
 type Scanner struct {
-	r   *bufio.Reader
-	pos int
+	r        *bufio.Reader
+	pos      int
+	last     Token
+	buffered bool
 }
 
+// NewScanner creates a new scanner backed by r
 func NewScanner(r io.Reader) Scanner {
 	return Scanner{r: bufio.NewReader(r)}
 }
 
+// Scan scans the backing io.Reader for the next token
+// and then returns it
 func (s *Scanner) Scan() Token {
-	start := s.pos // save this value
-	ch := s.read()
-	tok := Token{Tag: ILLEGAL, Value: string(ch), Start: start}
-	switch {
-	case ch == eof:
-		tok.Tag = EOF
-		tok.Value = ""
-	case ch == '{':
-		tok.Tag = VAR
-		tok.Value = s.scanQuoted('}')
-	case ch == '"':
-		tok.Tag = TEXT
-		tok.Value = s.scanQuoted('"')
-	case ch == '[':
-		tok.Tag = STARTEXEC
-	case ch == ']':
-		tok.Tag = ENDEXEC
-	case ch == '(':
-		tok.Tag = STARTGROUP
-	case ch == ')':
-		tok.Tag = ENDGROUP
-	case ch == '^':
-		tok.Tag = REDIRERR
-	case ch == '>':
-		tok.Tag = REDIROUT
-	case ch == ';':
-		tok.Tag = BREAK
-	case ch == ':':
-		tok.Tag = IDENTITY
-	case ch == '|':
-		if s.read() == '|' {
-			tok.Tag = OR
-			tok.Value = "||"
-		} else {
-			s.unread()
-			tok.Tag = PIPE
+	t := s.scan()
+	if t.Tag == CHUNK {
+		for {
+			next := s.scan()
+			if next.Tag == CHUNK {
+				t.Value += next.Value
+			} else {
+				s.unscan()
+				break
+			}
 		}
-	case ch == '&':
-		if s.read() == '&' {
-			tok.Tag = AND
-			tok.Value = "&&"
-		} else {
-			s.unread()
-			tok.Tag = ILLEGAL
-		}
-	case ch == '\\':
-		s.unread()
-		tok.Tag = TEXT
-		tok.Value = s.scanWhile(false, isIdent)
-	case isWs(ch):
-		s.unread()
-		tok.Tag = WS
-		tok.Value = s.scanWhile(false, isWs)
-	case isIdent(ch):
-		s.unread()
-		tok.Tag = TEXT
-		tok.Value = s.scanWhile(false, isIdent)
 	}
-	return tok
+	return t
 }
 
-func (s *Scanner) scanQuoted(endQuote rune) string {
-	return s.scanWhile(true, func(ch rune) bool { return ch != endQuote })
+func (s *Scanner) scan() Token {
+	if s.buffered {
+		s.buffered = false
+		return s.last
+	}
+	s.last = s.scanToken()
+	return s.last
+}
+
+func (s *Scanner) unscan() {
+	s.buffered = true
+}
+
+func (s *Scanner) scanToken() Token {
+	start := s.pos // save this value
+	ch := s.read()
+	switch {
+	case ch == eof:
+		return Token{Tag: EOF, Value: "", Start: start}
+	case ch == '(':
+		return Token{Tag: STARTGRP, Value: "(", Start: start}
+	case ch == ')':
+		return Token{Tag: ENDGRP, Value: ")", Start: start}
+	case ch == '^':
+		return Token{Tag: REDIRERR, Value: "^", Start: start}
+	case ch == '>':
+		return Token{Tag: REDIROUT, Value: ">", Start: start}
+	case ch == ';':
+		return Token{Tag: BREAK, Value: ";", Start: start}
+	case ch == '|':
+		if s.read() == '|' {
+			return Token{Tag: OR, Value: "||", Start: start}
+		}
+		s.unread()
+		return Token{Tag: PIPE, Value: "|", Start: start}
+	case ch == '&':
+		if s.read() == '&' {
+			return Token{Tag: AND, Value: "&&", Start: start}
+		}
+		s.unread()
+		return Token{Tag: BACKGRND, Value: "&", Start: start}
+	case ch == '"':
+		return Token{Tag: CHUNK, Value: s.scanQuoted(), Start: start}
+	case isWs(ch):
+		s.unread()
+		return Token{Tag: WS, Value: s.scanWs(), Start: start}
+	default:
+		s.unread()
+		return Token{Tag: CHUNK, Value: s.scanChunk(), Start: start}
+	}
+}
+
+func (s *Scanner) scanQuoted() string {
+	return s.scanWhile(true, func(ch rune) bool { return ch != '"' })
+}
+
+func (s *Scanner) scanWs() string {
+	return s.scanWhile(false, isWs)
+}
+
+func (s *Scanner) scanChunk() string {
+	return s.scanWhile(false, isntSpecial)
 }
 
 func (s *Scanner) scanWhile(consumeLast bool, accept func(rune) bool) string {
@@ -154,9 +171,6 @@ func isWs(ch rune) bool {
 	return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r'
 }
 
-func isIdent(ch rune) bool {
-	return (ch >= 'a' && ch <= 'z') ||
-		(ch >= 'A' && ch <= 'Z') ||
-		(ch >= '0' && ch <= '9') ||
-		ch == '_'
+func isntSpecial(ch rune) bool {
+	return !(ch == '^' || ch == '>' || ch == '&' || ch == '|' || ch == '(' || ch == ')' || ch == ';' || ch == '"')
 }
