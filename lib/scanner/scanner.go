@@ -20,8 +20,11 @@ const (
 	BACKGRND
 	STARTGRP
 	ENDGRP
+	EXE
+	VAR
 	AND
 	OR
+	NOT
 	BREAK
 )
 
@@ -36,10 +39,8 @@ type Token struct {
 
 // Scanner is a stateful scanner
 type Scanner struct {
-	r        *bufio.Reader
-	pos      int
-	last     Token
-	buffered bool
+	r   *bufio.Reader
+	pos int
 }
 
 // NewScanner creates a new scanner backed by r
@@ -47,38 +48,7 @@ func NewScanner(r io.Reader) Scanner {
 	return Scanner{r: bufio.NewReader(r)}
 }
 
-// Scan scans the backing io.Reader for the next token
-// and then returns it
 func (s *Scanner) Scan() Token {
-	t := s.scan()
-	if t.Tag == CHUNK {
-		for {
-			next := s.scan()
-			if next.Tag == CHUNK {
-				t.Value += next.Value
-			} else {
-				s.unscan()
-				break
-			}
-		}
-	}
-	return t
-}
-
-func (s *Scanner) scan() Token {
-	if s.buffered {
-		s.buffered = false
-		return s.last
-	}
-	s.last = s.scanToken()
-	return s.last
-}
-
-func (s *Scanner) unscan() {
-	s.buffered = true
-}
-
-func (s *Scanner) scanToken() Token {
 	start := s.pos // save this value
 	ch := s.read()
 	switch {
@@ -94,6 +64,8 @@ func (s *Scanner) scanToken() Token {
 		return Token{Tag: REDIROUT, Value: ">", Start: start}
 	case ch == ';':
 		return Token{Tag: BREAK, Value: ";", Start: start}
+	case ch == '!':
+		return Token{Tag: NOT, Value: "!", Start: start}
 	case ch == '|':
 		if s.read() == '|' {
 			return Token{Tag: OR, Value: "||", Start: start}
@@ -107,7 +79,11 @@ func (s *Scanner) scanToken() Token {
 		s.unread()
 		return Token{Tag: BACKGRND, Value: "&", Start: start}
 	case ch == '"':
-		return Token{Tag: CHUNK, Value: s.scanQuoted(), Start: start}
+		return Token{Tag: CHUNK, Value: s.scanQuoted('"'), Start: start}
+	case ch == '{':
+		return Token{Tag: VAR, Value: s.scanQuoted('}'), Start: start}
+	case ch == '[':
+		return Token{Tag: EXE, Value: s.scanQuoted(']'), Start: start}
 	case isWs(ch):
 		s.unread()
 		return Token{Tag: WS, Value: s.scanWs(), Start: start}
@@ -117,8 +93,8 @@ func (s *Scanner) scanToken() Token {
 	}
 }
 
-func (s *Scanner) scanQuoted() string {
-	return s.scanWhile(true, func(ch rune) bool { return ch != '"' })
+func (s *Scanner) scanQuoted(endQuote rune) string {
+	return s.scanWhile(true, func(ch rune) bool { return ch != endQuote })
 }
 
 func (s *Scanner) scanWs() string {
@@ -126,7 +102,7 @@ func (s *Scanner) scanWs() string {
 }
 
 func (s *Scanner) scanChunk() string {
-	return s.scanWhile(false, isntSpecial)
+	return s.scanWhile(false, isChunk)
 }
 
 func (s *Scanner) scanWhile(consumeLast bool, accept func(rune) bool) string {
@@ -157,8 +133,9 @@ func (s *Scanner) read() rune {
 	ch, _, err := s.r.ReadRune()
 	if err != nil {
 		ch = eof
+	} else {
+		s.pos++
 	}
-	s.pos++
 	return ch
 }
 
@@ -171,6 +148,12 @@ func isWs(ch rune) bool {
 	return ch == ' ' || ch == '\t' || ch == '\n' || ch == '\r'
 }
 
-func isntSpecial(ch rune) bool {
-	return !(ch == '^' || ch == '>' || ch == '&' || ch == '|' || ch == '(' || ch == ')' || ch == ';' || ch == '"')
+func isSpecial(ch rune) bool {
+	return ch == '^' || ch == '>' || ch == '&' || ch == '|' || ch == '(' ||
+		ch == ')' || ch == ';' || ch == '"' || ch == '[' || ch == ']' ||
+		ch == '{' || ch == '}'
+}
+
+func isChunk(ch rune) bool {
+	return !(isWs(ch) || isSpecial(ch))
 }
